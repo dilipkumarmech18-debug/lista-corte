@@ -18,36 +18,64 @@ st.markdown("---")
 
 
 def parse_csv(content: str) -> pd.DataFrame:
+    lines = [l for l in content.splitlines() if l.strip()]
+
+    # Auto-detect header row (contains MARCA)
+    header_idx = None
+    headers = []
+    for i, line in enumerate(lines):
+        cols = [c.strip() for c in line.split(';')]
+        if any('MARCA' in c.upper() for c in cols):
+            # Use this line as header — clean up column names
+            headers = []
+            for c in cols:
+                c = c.strip()
+                if 'CONJUNTO' in c.upper() or ('MARCA' in c.upper() and len(headers) > 0):
+                    headers.append('CONJUNTO')
+                elif 'MARCA' in c.upper():
+                    headers.append('MARCA')
+                elif 'QTD' in c.upper():
+                    headers.append('QTD')
+                elif 'MATERIAL' in c.upper():
+                    headers.append('MATERIAL')
+                elif 'ESPESSURA' in c.upper():
+                    headers.append('ESPESSURA')
+                elif 'ALTURA' in c.upper():
+                    headers.append('ALTURA')
+                elif 'COMPRIMENTO' in c.upper():
+                    headers.append('COMPRIMENTO')
+                else:
+                    headers.append(c if c else f'COL{len(headers)}')
+            header_idx = i
+            break
+
+    if header_idx is None or not headers:
+        return pd.DataFrame()
+
     rows = []
-    for line in content.splitlines():
-        if not line.strip():
-            continue
-        cols = line.split(';')
-        marca      = cols[0].strip() if len(cols) > 0 else ''
-        qtd        = cols[1].strip() if len(cols) > 1 else ''
-        conjunto   = cols[2].strip() if len(cols) > 2 else ''
-        material   = cols[3].strip() if len(cols) > 3 else ''
-        espessura  = cols[4].strip() if len(cols) > 4 else ''
-        altura     = cols[5].strip() if len(cols) > 5 else ''
-        comprimento= cols[6].strip() if len(cols) > 6 else ''
+    for line in lines[header_idx + 1:]:
+        cols = [c.strip() for c in line.split(';')]
 
-        # Skip separator and header lines
-        if re.match(r'^-{3,}', marca):
+        # Skip separator lines and section headers
+        if re.match(r'^-{3,}', cols[0]):
             continue
-        if marca == 'MARCA':
-            continue
-        if not marca or not qtd or not qtd.isdigit():
+        if not cols[0]:
             continue
 
-        rows.append({
-            'MARCA':       marca,
-            'QTD':         int(qtd),
-            'CONJUNTO':    conjunto,
-            'MATERIAL':    material,
-            'ESPESSURA':   int(espessura)   if espessura.isdigit()   else None,
-            'ALTURA':      int(altura)      if altura.isdigit()      else None,
-            'COMPRIMENTO': int(comprimento) if comprimento.isdigit() else None,
-        })
+        row = {}
+        for j, h in enumerate(headers):
+            val = cols[j].strip() if j < len(cols) else ''
+            if h in ('QTD', 'ESPESSURA', 'ALTURA', 'COMPRIMENTO'):
+                row[h] = int(val) if val.isdigit() else None
+            else:
+                row[h] = val
+
+        # Must have MARCA and valid QTD
+        if not row.get('MARCA') or row.get('QTD') is None:
+            continue
+
+        rows.append(row)
+
     return pd.DataFrame(rows)
 
 
@@ -67,36 +95,32 @@ if uploaded:
 
     # ── Filters ──────────────────────────────────────────────────────────────
     st.subheader("🔽 Filtros")
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    with col1:
-        materiais = ['Todos'] + sorted(df['MATERIAL'].dropna().unique().tolist())
-        mat_sel = st.selectbox("Material", materiais)
-
-    with col2:
-        marcas = ['Todas'] + sorted(df['MARCA'].dropna().unique().tolist())
-        marca_sel = st.selectbox("Marca", marcas)
-
-    with col3:
-        conjuntos = ['Todos'] + sorted(df['CONJUNTO'].dropna().unique().tolist())
-        conj_sel = st.selectbox("Conjunto", conjuntos)
-
-    with col4:
-        esp_vals = sorted(df['ESPESSURA'].dropna().unique().tolist())
-        esp_sel = st.multiselect("Espessura (mm)", esp_vals)
-
-    with col5:
-        search = st.text_input("🔍 Pesquisa livre")
-
-    # ── Apply filters ─────────────────────────────────────────────────────────
     filtered = df.copy()
 
-    if mat_sel != 'Todos':
-        filtered = filtered[filtered['MATERIAL'] == mat_sel]
-    if marca_sel != 'Todas':
-        filtered = filtered[filtered['MARCA'] == marca_sel]
-    if conj_sel != 'Todos':
-        filtered = filtered[filtered['CONJUNTO'] == conj_sel]
+    filter_cols = st.columns(5)
+    filter_idx = 0
+    active_filters = {}
+
+    text_filter_cols = ['MATERIAL', 'MARCA', 'CONJUNTO']
+    for col_name in text_filter_cols:
+        if col_name in df.columns and filter_idx < 4:
+            vals = ['Todos'] + sorted(df[col_name].dropna().unique().tolist())
+            sel = filter_cols[filter_idx].selectbox(col_name.capitalize(), vals)
+            active_filters[col_name] = sel
+            filter_idx += 1
+
+    if 'ESPESSURA' in df.columns and filter_idx < 4:
+        esp_vals = sorted(df['ESPESSURA'].dropna().unique().tolist())
+        esp_sel = filter_cols[filter_idx].multiselect("Espessura (mm)", esp_vals)
+        filter_idx += 1
+    else:
+        esp_sel = []
+
+    search = filter_cols[4].text_input("🔍 Pesquisa livre")
+
+    for col_name, sel in active_filters.items():
+        if sel != 'Todos':
+            filtered = filtered[filtered[col_name] == sel]
     if esp_sel:
         filtered = filtered[filtered['ESPESSURA'].isin(esp_sel)]
     if search:
